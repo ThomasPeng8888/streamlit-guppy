@@ -80,6 +80,9 @@ def main():
     if 'admin_logged_in' not in st.session_state:
         st.session_state.admin_logged_in = False
     
+    logo_url = "https://raw.githubusercontent.com/ThomasPeng8888/streamlit-guppy/main/logo.png"
+    st.sidebar.image(logo_url, caption="拯救會員管理系統", width=150)
+
     st.sidebar.title("導覽選單")
     mode = st.sidebar.radio("請選擇頁面", ["會員點數排行榜", "抽獎活動", "管理員頁面"])
 
