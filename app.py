@@ -47,6 +47,7 @@ def draw_winners(df, num_winners):
 def update_winners_status(sheet, winners):
     """將中獎者在 Google Sheet 中的狀態更新為 '是'。"""
     try:
+        # 為了準確找到行數，讀取所有電子郵件
         emails_list = sheet.col_values(2)
         header_row = sheet.row_values(1)
         try:
@@ -58,7 +59,6 @@ def update_winners_status(sheet, winners):
         for winner in winners:
             try:
                 # 找到電子郵件所在的行數 (1-based index)
-                # 由於 get_all_records() 會將數字讀成數字，這裡使用 col_values(2) 確保讀取的是字串列表
                 row_index = emails_list.index(winner['電子郵件']) + 1
                 sheet.update_cell(row_index, status_col, "是")
             except ValueError:
@@ -89,7 +89,9 @@ def build_append_row(sheet, nickname, points, account, password):
     # 檢查所有必要欄位是否都存在於標頭中
     if not all(col in header for col in data_map.keys()):
         missing_cols = [col for col in data_map.keys() if col not in header]
-        st.sidebar.error(f"錯誤：您的 '拯救會員管理' Sheet 缺少必要的欄位: {', '.join(missing_cols)}。")
+        # 在側邊欄或主頁面顯示錯誤，取決於是哪個提交按鈕觸發
+        error_location = st.sidebar if st.session_state.get('registration_trigger', False) else st
+        error_location.error(f"錯誤：您的 '拯救會員管理' Sheet 缺少必要的欄位: {', '.join(missing_cols)}。")
         return None
     
     # 根據標頭順序構建要新增的列
@@ -111,6 +113,8 @@ def main():
         st.session_state.member_logged_in = False
     if 'current_member_nickname' not in st.session_state:
         st.session_state.current_member_nickname = None
+    if 'registration_trigger' not in st.session_state:
+        st.session_state.registration_trigger = False # 用於追蹤註冊是從哪裡觸發的
 
     # 側邊欄 Logo
     logo_url = "https://raw.githubusercontent.com/ThomasPeng8888/streamlit-guppy/main/logo.png"
@@ -118,7 +122,7 @@ def main():
     st.sidebar.image(logo_url, caption="拯救會員管理系統", width=150)
 
     # ----------------------------------------------------
-    # 📌 登入/註冊區塊
+    # 📌 登入/註冊區塊 (保留在側邊欄)
     st.sidebar.markdown("---")
     
     sheet = get_points_sheet()
@@ -143,8 +147,7 @@ def main():
                 st.sidebar.error("會員資料表格缺少 '帳號'、'密碼' 或 '暱稱' 欄位。請確認 Google Sheet 已更新。")
                 return
 
-            # 【修正點 1】強制將 DataFrame 中的 '帳號' 和 '密碼' 轉換為字串型態
-            # 這能確保與 st.text_input 傳入的字串進行正確比對，解決純數字帳密登入失敗的問題。
+            # 強制將 DataFrame 中的 '帳號' 和 '密碼' 轉換為字串型態
             df['帳號'] = df.get('帳號', pd.Series(dtype=str)).astype(str)
             df['密碼'] = df.get('密碼', pd.Series(dtype=str)).astype(str)
             
@@ -171,14 +174,13 @@ def main():
             register_button = st.form_submit_button("立即註冊")
         
         if register_button:
+            st.session_state.registration_trigger = True # 標記註冊由側邊欄觸發
             if not new_nickname or not new_account or not new_password:
                 st.sidebar.error("暱稱、帳號和密碼為必填欄位。")
             else:
                 # 檢查暱稱和帳號是否重複
-                # get_all_values() 預設讀取為字串，所以這裡不需要額外的型態轉換
                 all_values = sheet.get_all_values()
                 
-                # 確保至少有標題列
                 if len(all_values) > 0:
                     header = all_values[0]
                     data_rows = all_values[1:]
@@ -189,6 +191,7 @@ def main():
                         account_col_index = header.index('帳號')
                     except ValueError as e:
                         st.sidebar.error(f"會員資料表格缺少必要的欄位 ({e.args[0].split()[-1].strip()})。")
+                        st.session_state.registration_trigger = False
                         return
 
                     # 取得現有資料進行比對
@@ -218,6 +221,7 @@ def main():
                         st.sidebar.success(f"會員 **{new_nickname}** 註冊成功並自動登入！")
                         st.balloons()
                         st.rerun()
+            st.session_state.registration_trigger = False
 
     else:
         st.sidebar.success(f"已登入：**{st.session_state.current_member_nickname}**")
@@ -229,100 +233,211 @@ def main():
     st.sidebar.markdown("---")
     # ----------------------------------------------------
     
-    st.sidebar.title("導覽選單")
-    mode = st.sidebar.radio("請選擇頁面", ["會員點數排行榜", "抽獎活動", "管理員頁面"])
+    # 移除原本的 st.sidebar.title("導覽選單") 和 st.sidebar.radio
+    
+    # --- 頂部導覽列 (Main Content Tabs) ---
+    st.title("應用程式功能區")
+    
+    tab_rank, tab_raffle, tab_admin = st.tabs(["會員點數排行榜", "抽獎活動", "管理員頁面"])
 
-    # 顯示會員點數排行榜 (需登入)
-    if mode == "會員點數排行榜":
-        st.title("會員點數排行榜 🏆")
+
+    # ----------------------------------------------------
+    # 📌 頁面 1: 會員點數排行榜
+    with tab_rank:
+        st.subheader("會員點數排行榜 🏆")
         
         if not st.session_state.member_logged_in:
             st.warning("⚠️ 此頁面為會員專屬，請先登入帳號或註冊新會員。")
-            return
+        else:
+            st.info(f"歡迎 **{st.session_state.current_member_nickname}**！所有會員點數排名，會即時更新喔！")
+            
+            if st.button("重新整理排行榜"):
+                st.rerun()
 
-        st.info(f"歡迎 **{st.session_state.current_member_nickname}**！所有會員點數排名，會即時更新喔！")
-        
-        if st.button("重新整理"):
-            st.rerun()
+            if sheet:
+                data = sheet.get_all_records()
+                if data:
+                    df = pd.DataFrame(data)
+                    
+                    # 確保 '點數' 欄位是數字類型，並處理錯誤
+                    df['點數'] = pd.to_numeric(df.get('點數', pd.Series(dtype=int)), errors='coerce').fillna(0).astype(int)
+                    
+                    # 按點數降序排列，並重設索引
+                    sorted_df = df.sort_values(by='點數', ascending=False).reset_index(drop=True)
+                    
+                    st.markdown("---")
+                    st.subheader("點數冠軍榜 ✨")
+                    
+                    # 視覺化前三名
+                    if len(sorted_df) >= 3:
+                        top_3_cols = st.columns(3)
+                        with top_3_cols[0]:
+                            st.markdown(f"<h3 style='text-align: center;'>🥇 No.1</h3>", unsafe_allow_html=True)
+                            # 使用 Markdown 確保暱稱不會過長而影響 metric 顯示
+                            st.markdown(f"**{sorted_df.iloc[0]['暱稱']}**", unsafe_allow_html=True)
+                            st.metric("點數", value=f"{sorted_df.iloc[0]['點數']:,}") # 點數加上千分位
+                        with top_3_cols[1]:
+                            st.markdown(f"<h3 style='text-align: center;'>🥈 No.2</h3>", unsafe_allow_html=True)
+                            st.markdown(f"**{sorted_df.iloc[1]['暱稱']}**", unsafe_allow_html=True)
+                            st.metric("點數", value=f"{sorted_df.iloc[1]['點數']:,}")
+                        with top_3_cols[2]:
+                            st.markdown(f"<h3 style='text-align: center;'>🥉 No.3</h3>", unsafe_allow_html=True)
+                            st.markdown(f"**{sorted_df.iloc[2]['暱稱']}**", unsafe_allow_html=True)
+                            st.metric("點數", value=f"{sorted_df.iloc[2]['點數']:,}")
+                    elif len(sorted_df) > 0:
+                        st.warning(f"會員人數不足3位 (目前 {len(sorted_df)} 位)，無法顯示完整前三名。")
 
-        if sheet:
-            data = sheet.get_all_records()
-            if data:
-                df = pd.DataFrame(data)
-                
-                # 確保 '點數' 欄位是數字類型，並處理錯誤
-                df['點數'] = pd.to_numeric(df.get('點數', pd.Series(dtype=int)), errors='coerce').fillna(0).astype(int)
-                
-                # 按點數降序排列，並重設索引
-                sorted_df = df.sort_values(by='點數', ascending=False).reset_index(drop=True)
-                
-                st.markdown("---")
-                st.subheader("點數冠軍榜 ✨")
-                # 視覺化前三名
-                if len(sorted_df) >= 3:
-                    top_3_cols = st.columns(3)
-                    with top_3_cols[0]:
-                        st.markdown(f"**🥇 No.1**")
-                        st.metric(sorted_df.iloc[0]['暱稱'], value=sorted_df.iloc[0]['點數'])
-                    with top_3_cols[1]:
-                        st.markdown(f"**🥈 No.2**")
-                        st.metric(sorted_df.iloc[1]['暱稱'], value=sorted_df.iloc[1]['點數'])
-                    with top_3_cols[2]:
-                        st.markdown(f"**🥉 No.3**")
-                        st.metric(sorted_df.iloc[2]['暱稱'], value=sorted_df.iloc[2]['點數'])
-                elif len(sorted_df) > 0:
-                    st.warning(f"會員人數不足3位 (目前 {len(sorted_df)} 位)，無法顯示完整前三名。")
+                    st.markdown("---")
+                    st.subheader("完整排行榜")
+                    
+                    # ----------------------------------------------------
+                    # 🏆 UI/UX 優化：使用 Markdown/CSS 建立自定義且對齊的排行榜
+                    # ----------------------------------------------------
+                    st.markdown("""
+                    <style>
+                    /* Custom CSS for a better-aligned and styled leaderboard */
+                    .leaderboard-header-row {
+                        display: flex;
+                        font-weight: bold;
+                        font-size: 1.1em;
+                        padding: 10px 15px;
+                        background-color: #e6f3ff; /* 淺藍色背景 */
+                        border-radius: 8px;
+                        margin-bottom: 5px;
+                        color: #1f78b4;
+                    }
 
-                st.markdown("---")
-                st.subheader("完整排行榜")
-                
-                # 新增一個 '排名' 欄位，從 1 開始編號，並加上 'No.' 前綴
-                # 只顯示與排名相關的欄位
-                display_df = sorted_df[['暱稱', '點數']].copy()
-                display_df.insert(0, '排名', ['No.' + str(i) for i in range(1, 1 + len(display_df))])
+                    .leaderboard-item-row {
+                        display: flex;
+                        padding: 8px 15px;
+                        margin-bottom: 5px;
+                        border-radius: 8px;
+                        align-items: center;
+                        background-color: white;
+                        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+                        transition: all 0.2s ease-in-out;
+                        /* 設置每個元素的高度，避免在 Streamlit 中因內容不同而導致的不對齊 */
+                        min-height: 40px; 
+                        color: #333333; /* ✨ 修改點：為所有行項目設定清晰的深灰色字體 */
+                    }
+                    .leaderboard-item-row:hover {
+                        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                        transform: translateY(-1px);
+                    }
 
-                st.dataframe(display_df, hide_index=True)
-            else:
-                st.warning("目前沒有任何會員資料可顯示。")
+                    /* 使用固定百分比寬度確保對齊 */
+                    .leaderboard-rank { width: 15%; text-align: left; font-weight: bold; }
+                    .leaderboard-name { width: 60%; text-align: left; }
+                    .leaderboard-points { width: 25%; text-align: right; font-weight: bold; color: #0056b3; } /* ✨ 修改點：改為清晰的深藍色 */
+
+                    /* 特殊前三名樣式 */
+                    .rank-1 { background-color: #fffde7; border-left: 5px solid #FFD700; }
+                    .rank-2 { background-color: #f7f7f7; border-left: 5px solid #C0C0C0; }
+                    .rank-3 { background-color: #fff0e6; border-left: 5px solid #CD7F32; }
+
+                    .leaderboard-name, .leaderboard-points, .leaderboard-rank {
+                        /* 確保文字不會換行，使用省略號 */
+                        white-space: nowrap; 
+                        overflow: hidden; 
+                        text-overflow: ellipsis;
+                        align-self: center; /* 垂直居中 */
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
+
+                    # 排行榜標頭
+                    st.markdown("""
+                    <div class='leaderboard-header-row'>
+                        <span class='leaderboard-rank'>排名</span>
+                        <span class='leaderboard-name'>暱稱</span>
+                        <span class='leaderboard-points'>點數</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+
+                    for index, row in sorted_df.iterrows():
+                        rank = index + 1
+                        nickname = row['暱稱']
+                        points = f"{row['點數']:,}" # 點數加上千分位格式
+
+                        # 根據排名決定樣式
+                        if rank == 1:
+                            rank_icon = "🥇 No.1"
+                            row_class = "rank-1"
+                        elif rank == 2:
+                            rank_icon = "🥈 No.2"
+                            row_class = "rank-2"
+                        elif rank == 3:
+                            rank_icon = "🥉 No.3"
+                            row_class = "rank-3"
+                        else:
+                            rank_icon = f"No.{rank}"
+                            row_class = ""
+
+                        # 渲染每一行排行榜
+                        st.markdown(f"""
+                        <div class='leaderboard-item-row {row_class}'>
+                            <span class='leaderboard-rank'>{rank_icon}</span>
+                            <span class='leaderboard-name'>{nickname}</span>
+                            <span class='leaderboard-points'>{points}</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    # ----------------------------------------------------
+                    
+                else:
+                    st.warning("目前沒有任何會員資料可顯示。")
     
-    # 顯示抽獎活動報名頁面 (需登入)
-    elif mode == "抽獎活動":
-        st.title("抽獎活動報名表單")
+    # ----------------------------------------------------
+    # 📌 頁面 2: 抽獎活動
+    with tab_raffle:
+        st.subheader("抽獎活動報名表單")
         
         if not st.session_state.member_logged_in:
             st.warning("⚠️ 此頁面為會員專屬，請先登入帳號或註冊新會員才能參與抽獎活動。")
-            return
-            
-        st.info("請填寫您的資訊，以便參與抽獎！")
+        else:
+            st.info("請填寫您的資訊，以便參與抽獎！")
 
-        with st.form(key="registration_form"):
-            name = st.text_input("姓名")
-            email = st.text_input("電子郵件")
-            submit_button = st.form_submit_button("提交報名")
-        
-        if submit_button:
-            if not name or not email:
-                st.error("姓名和電子郵件為必填欄位。")
-            else:
-                raffle_sheet = get_raffle_sheet()
-                if raffle_sheet:
-                    # 檢查電子郵件重複性 (從第 2 行開始檢查，忽略標題)
-                    try:
-                        emails_list = raffle_sheet.col_values(2)[1:] 
-                    except Exception as e:
-                        st.error(f"無法讀取電子郵件列表：{e}")
-                        return
-                    
-                    if email in emails_list:
-                        st.warning("您使用的電子郵件已報名過，請勿重複提交。")
-                    else:
-                        # 假設抽獎名單表格結構是 [姓名, 電子郵件]
-                        raffle_sheet.append_row([name, email])
-                        st.success("報名成功！感謝您的參與！")
-                        st.balloons()
-    
-    # 顯示管理員頁面
-    elif mode == "管理員頁面":
+            with st.form(key="registration_form"):
+                name = st.text_input("姓名")
+                email = st.text_input("電子郵件")
+                submit_button = st.form_submit_button("提交報名")
+            
+            if submit_button:
+                if not name or not email:
+                    st.error("姓名和電子郵件為必填欄位。")
+                else:
+                    raffle_sheet = get_raffle_sheet()
+                    if raffle_sheet:
+                        # 檢查電子郵件重複性 (從第 2 行開始檢查，忽略標題)
+                        try:
+                            # 假設電子郵件在第 2 欄
+                            emails_list = raffle_sheet.col_values(2)[1:] 
+                        except Exception as e:
+                            st.error(f"無法讀取電子郵件列表：{e}")
+                            return
+                        
+                        if email in emails_list:
+                            st.warning("您使用的電子郵件已報名過，請勿重複提交。")
+                        else:
+                            # 假設抽獎名單表格結構是 [姓名, 電子郵件, 是否中獎 (此欄位應該是手動新增的)]
+                            # 為了確保資料順序正確，需要讀取標頭並動態建立行
+                            try:
+                                raffle_header = raffle_sheet.row_values(1)
+                                row_to_append = []
+                                data_map = {'姓名': name, '電子郵件': email, '是否中獎': ''}
+                                for col_name in raffle_header:
+                                    row_to_append.append(data_map.get(col_name, ''))
+
+                                raffle_sheet.append_row(row_to_append)
+                                st.success("報名成功！感謝您的參與！")
+                                st.balloons()
+                            except Exception as e:
+                                st.error(f"新增抽獎報名資料時發生錯誤：{e}")
+
+
+    # ----------------------------------------------------
+    # 📌 頁面 3: 管理員頁面
+    with tab_admin:
         if not st.session_state.admin_logged_in:
             with st.form(key="admin_login_form"):
                 st.subheader("管理員登入 🔐")
@@ -330,7 +445,6 @@ def main():
                 login_button = st.form_submit_button("登入")
 
             if login_button:
-                # 【修正點 2】確保管理員密碼也使用 .get() 檢查，避免 secrets 中沒有該 key 時出錯
                 if password and password == st.secrets.get("admin_password"):
                     st.session_state.admin_logged_in = True
                     st.success("登入成功！")
@@ -340,6 +454,8 @@ def main():
         else:
             st.title("管理員控制台 ⚙️")
             st.markdown("---")
+            
+            # 管理員頁面內部的子選單仍使用 st.tabs
             tab1, tab2, tab3 = st.tabs(["點數管理", "抽獎管理", "新增會員"])
 
             # 點數管理功能
@@ -356,23 +472,26 @@ def main():
                         # 確保 '點數' 欄位是數字類型
                         df['點數'] = pd.to_numeric(df.get('點數', pd.Series(dtype=int)), errors='coerce').fillna(0).astype(int)
                         
-                        # 【修正點 3】確保暱稱也是字串，用於下拉選單和後續查找
+                        # 確保暱稱也是字串，用於下拉選單和後續查找
                         df['暱稱'] = df.get('暱稱', pd.Series(dtype=str)).astype(str)
                         
                         st.markdown("#### 所有會員列表")
-                        # --- 根據用戶要求修改：只顯示 '暱稱' 和 '點數' 欄位 ---
+                        
+                        # 只顯示 '暱稱' 和 '點數' 欄位
                         display_cols = ['暱稱', '點數']
                         available_cols = [col for col in display_cols if col in df.columns]
                         st.dataframe(df[available_cols], hide_index=True)
-                        # ----------------------------------------------------
                         
-                        member_nickname = st.selectbox(
-                            "選擇要管理的會員暱稱：",
-                            options=df['暱稱'].tolist()
-                        )
-                        
+                        if '暱稱' in df.columns:
+                            member_nickname = st.selectbox(
+                                "選擇要管理的會員暱稱：",
+                                options=df['暱稱'].tolist()
+                            )
+                        else:
+                            st.warning("會員資料表格缺少 '暱稱' 欄位。")
+                            member_nickname = None
+
                         if member_nickname:
-                            # 由於上面已將暱稱轉換為 str，這裡的查詢會更可靠
                             member_data = df[df['暱稱'] == member_nickname].iloc[0]
                             st.markdown("---")
                             st.metric(label="目前點數", value=member_data['點數'])
@@ -401,7 +520,6 @@ def main():
                                 else:
                                     try:
                                         # 找出暱稱所在行 (gspread 索引從 1 開始)
-                                        # 這裡使用 col_values(1) 讀取的也是字串，與 member_nickname 匹配
                                         nicknames_list = sheet.col_values(1)
                                         row_index = nicknames_list.index(member_nickname) + 1 
                                         
@@ -430,6 +548,8 @@ def main():
                             st.error("抽獎名單表格中找不到 '是否中獎' 欄位，請在 Google Sheet 中手動新增。")
                             eligible_df = pd.DataFrame() 
                         else:
+                            # 強制將 '是否中獎' 欄位轉換為字串，以避免因資料型態不一致導致過濾失敗
+                            df['是否中獎'] = df.get('是否中獎', pd.Series(dtype=str)).astype(str)
                             # 過濾掉已經中獎的參與者
                             eligible_df = df[df['是否中獎'] != '是'] 
 
